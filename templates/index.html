@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="initial-scale=1, width=device-width">
+
+        <link href="/static/styles.css" rel="stylesheet">
+
+        <title>Bezier Curves</title>
+    </head>
+
+    <body>
+
+        <div class="container">
+            <canvas id="canvas")>
+                This text is displayed if your browser does not support HTML5 Canvas.
+            </canvas>
+        </div>
+        <div class="container">
+            <input type="range" disabled min="0" max="0" step="0.01" value="0" id="slider">
+            <button type =button" id="tangent">Tangent Vector</button>
+            <button type="button" id="box">Bounding Box</button>
+            <button type="button" id="lc">Linear Combination</button>
+            <button type="button" id="lerps">Lerps</button>
+            <button type="button" id="osculating">Osculating Circle</button>
+        </div>
+
+        <script>
+
+            class Point {
+
+                constructor(x, y) {
+                    if (typeof x === 'number' && typeof y === 'number') {
+                        this.x = x, this.y = y;
+
+                        this.radius = POINT_RADIUS;
+                        this.color = POINT_COLOR;
+                        this.mode = NORMAL;
+
+                        this.visible = true;
+                        this.moving = false;
+                    } else {
+                        throw new Error("Point constructor: at least one argument is not a number")
+                    }
+                }
+
+                draw(context) {
+                    if (this.mode === NORMAL) {
+                        context.fillStyle = this.color;
+                    } else if (this.mode === POINT_MOVING) {
+                        context.fillStyle = POINT_COLOR_MOVING;
+                    } else if (this.mode === POINT_FORMING_BEZIER) {
+                        context.fillStyle = POINT_COLOR_FORMING_BEZIER;
+                    } else if (this.mode === POINT_ORIGIN) {
+                        context.fillStyle = 'black'
+                    }
+                    context.beginPath();
+                    context.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                    context.fill();
+                    /*if (this.mode === NORMAL) {
+                        context.strokeStyle = 'blue';
+                        context.stroke();
+                    } else */if (this.mode === POINT_ORIGIN) {
+                        context.strokeStyle = 'white';
+                        context.stroke();
+                    }
+                }
+
+                // distance(other_point) {
+                //     return Math.hypot(this.x - other_point.x, this.y - other_point.y);
+                // }
+
+                // static distance(one_point, other_point) {
+                //     return one_point.distance(other_point);
+                // }
+            }
+
+            class CubicBezier {
+
+                constructor(pts) {
+                    if (pts.length == 4 && pts[0] instanceof Point && pts[1] instanceof Point && pts[2] instanceof Point && pts[3] instanceof Point) {
+                        this.points = pts;
+                        this.calc_center();
+                        this.box = this.calculate_bounds();
+
+                        this.color = BEZIER_COLOR;
+                        this.mode = NORMAL;
+                        this.visible = true;
+
+                        this.show_lerps = false;
+                        this.show_handles = false;
+                        this.show_box = false;
+                        this.show_tangent = true;
+                        this.show_normal = true;
+                        this.show_lc = true;
+                        this.show_osculating = true;
+                        this.color_lerps = ['chocolate', 'coral', 'bisque'];
+                        this.t_param = 0.5;
+                    } else {
+                        throw new Error("CubicBezier constructor: curve must be defined by 4 points");
+                    }
+                }
+
+                calc_center() {
+                    this.origin = new Point(
+                        this.points.map(p => p.x).reduce((sum, val, i) => sum + val, 0) / 4,
+                        this.points.map(p => p.y).reduce((sum, val, i) => sum + val, 0) / 4
+                    );
+                    this.origin.mode = POINT_ORIGIN;
+                }
+
+                /* uses the Bernstein polynomial form of Bezier curves to calculate the x and y
+                     values of the curve for a given t parameter
+                     https://en.wikipedia.org/wiki/Bernstein_polynomial */
+
+                points_linear_comb(coefficients) {
+                    return new Point(
+                        this.points.map(p => p.x).reduce((sum, val, i) => sum + val * coefficients[i], 0),
+                        this.points.map(p => p.y).reduce((sum, val, i) => sum + val * coefficients[i], 0)
+                    );
+                }
+
+                calc_bernstein(t) {
+                    return this.points_linear_comb([
+                        -(t**3) + 3*(t**2) - 3*t + 1, 3*(t**3) - 6*(t**2) + 3*t, -3*(t**3) + 3*(t**2), t**3
+                    ]);
+                }
+
+                calc_bernstein_derivative(t) {
+                    return this.points_linear_comb([
+                        -3*(t**2) + 6*t - 3, 9*(t**2) - 12*t + 3, -9*(t**2) + 6*t, 3*(t**2)
+                    ]);
+                }
+
+                calc_bernstein_second_derivative(t) {
+                    return this.points_linear_comb([-6*t + 6, 18*t - 12, -18*t + 6, 6*t]);
+                }
+
+
+                calculate_bounds() {
+
+                    function quadratic_formula(a, b, c, self) {
+                        let discriminant = b**2 - 4*a*c;
+                        if (discriminant < 0)
+                            return [];
+
+                        return [
+                            (-b + Math.sqrt(discriminant)) / (2 * a),
+                            (-b - Math.sqrt(discriminant)) / (2 * a)
+                        ];
+                    }
+
+                    // the curve passes through the first and last points, so these are potential extrema
+                    let pot_x = [this.points[0].x, this.points[this.points.length - 1].x];
+                    let pot_y = [this.points[0].y, this.points[this.points.length - 1].y];
+
+
+                    let x_vals = this.points.map(point => point.x);
+                    let y_vals = this.points.map(point => point.y);
+
+                    let a_x = x_vals.reduce((sum, val, i) => sum + val * [-3, 9, -9, 3][i], 0);
+                    let b_x = x_vals.reduce((sum, val, i) => sum + val * [6, -12, 6, 0][i], 0);
+                    let c_x = x_vals.reduce((sum, val, i) => sum + val * [-3, 3, 0, 0][i], 0);
+
+                    let a_y = y_vals.reduce((sum, val, i) => sum + val * [-3, 9, -9, 3][i], 0);
+                    let b_y = y_vals.reduce((sum, val, i) => sum + val * [6, -12, 6, 0][i], 0);
+                    let c_y = y_vals.reduce((sum, val, i) => sum + val * [-3, 3, 0, 0][i], 0);
+
+                    let self = this;
+                    let r_x = quadratic_formula(a_x, b_x, c_x, self);
+                    let r_y = quadratic_formula(a_y, b_y, c_y, self);
+
+                    for (let root of quadratic_formula(a_x, b_x, c_x, self)) {
+                        // the domain of the t parameter is 0 <= t <= 1
+                        if (root >= 0 && root <= 1) {
+                            pot_x.push(self.calc_bernstein(root).x);
+                        }
+                    }
+                    for (let root of quadratic_formula(a_y, b_y, c_y, self)) {
+                        // the domain of the t parameter is 0 <= t <= 1
+                        if (root >= 0 && root <= 1) {
+                            pot_y.push(self.calc_bernstein(root).y);
+                        }
+                    }
+
+                    let min = new Point(Math.min(...pot_x), Math.min(...pot_y));
+                    let max = new Point(Math.max(...pot_x), Math.max(...pot_y));
+
+                    return [min, max];
+                }
+
+                draw(context) {
+                    for (let point of this.points) {
+                        point.draw(context);
+                    }
+
+                    context.strokeStyle = this.color;
+                    if (this.show_lerps || this.show_tangent || this.show_lc) {
+                        context.strokeStyle = 'tomato';
+                    }
+                    context.lineWidth = 2;
+                    context.beginPath();
+                    context.moveTo(this.points[0].x, this.points[0].y);
+                    context.bezierCurveTo(this.points[1].x, this.points[1].y, this.points[2].x, this.points[2].y, this.points[3].x, this.points[3].y);
+                    context.stroke();
+                    context.lineWidth = 1;
+
+                    let cur_t = this.calc_bernstein(this.t_param);
+
+                    if (this.show_lerps) {
+                        this.draw_lerps(this.points, this.t_param, this.color_lerps, context);
+                    } else if (this.show_handles) {
+                        this.draw_handles(context);
+                    }
+                    if (this.show_lerps || this.show_tangent || this.show_normal || this.show_lc || this.show_osculating) {
+                        cur_t.color = 'red';
+                        cur_t.radius += 1;
+                        cur_t.draw(context);
+                    }
+                    if (this.show_box) {
+                        let bounds = this.calculate_bounds();
+                        context.globalAlpha = 0.5;
+                        context.strokeStyle = 'blue';
+                        context.strokeRect(bounds[0].x, bounds[0].y, bounds[1].x - bounds[0].x, bounds[1].y - bounds[0].y);
+                        context.fillStyle = 'blue';
+                        context.globalAlpha = 0.03;
+                        context.fillRect(bounds[0].x, bounds[0].y, bounds[1].x - bounds[0].x, bounds[1].y - bounds[0].y);
+                        context.globalAlpha = 1.0;
+                    }
+                    if (this.show_tangent || this.show_normal) {
+                        let deriv = this.calc_bernstein_derivative(this.t_param);
+                        let der2 = this.calc_bernstein_second_derivative(this.t_param);
+
+                        if (this.show_tangent) {
+                            drawArrow(cur_t.x, cur_t.y, cur_t.x + deriv.x / 5, cur_t.y + deriv.y / 5, context, '#FF47A6');
+                        }
+
+                        if (this.show_normal) {
+                            if (deriv.y * der2.x - deriv.x * der2.y >= 0) {
+                                drawArrow(cur_t.x, cur_t.y, cur_t.x + deriv.y / 5, cur_t.y - deriv.x / 5, context, '#B6FF72');
+                            } else {
+                                drawArrow(cur_t.x, cur_t.y, cur_t.x - deriv.y / 5, cur_t.y + deriv.x / 5, context, '#B6FF72');
+                            }
+                        }
+
+                        // drawArrow(cur_t.x, cur_t.y, cur_t.x + der2.x / 5, cur_t.y + der2.y / 5, context, 'red' ) 2nd der vector for testing
+                    }
+                    if (this.show_lc) {
+                        this.origin.draw(context);
+
+                        // draw dotted vectors between "origin" and curve control points
+                        for (let i = 0; i < this.points.length; i++) {
+                            drawArrow(
+                                this.origin.x, this.origin.y,
+                                this.points[i].x, this.points[i].y,
+                                context, BernsteinBox.colors[i], 2, 0.35, [3, 5], 10
+                            );
+                        }
+
+                        let start_x = this.origin.x;
+                        let start_y = this.origin.y;
+
+                        for (let i = 0; i < this.points.length; i++) {
+                            let mult = BernsteinBox.functions[i](this.t_param);
+                            let dx = (this.points[i].x - this.origin.x) * mult;
+                            let dy = (this.points[i].y - this.origin.y) * mult;
+                            drawArrow(start_x, start_y, start_x + dx, start_y + dy,
+                                context, BernsteinBox.colors[i], 3, 1.0, [], 5);
+                            start_x = start_x + dx;
+                            start_y = start_y + dy;
+                        }
+                    }
+                    if (this.show_osculating) {
+                        console.log("trying");
+                        let d = this.calc_bernstein_derivative(this.t_param);
+                        let d2 = this.calc_bernstein_second_derivative(this.t_param);
+
+                        let d_len = Math.hypot(d.x, d.y);
+                        let r = ((d.x * d.x) + (d.y * d.y))**(1.5) / Math.abs(d.x * d2.y - d.y * d2.x);
+
+                        let normal = new Point(d.y / d_len * r, -d.x / d_len * r);
+                        console.log(d);
+                        console.log(normal);
+                        if (normal.x * d2.x + normal.y * d2.y < 0) {
+                            normal.x *= -1;
+                            normal.y *= -1;
+                        }
+                        let center_x = cur_t.x + normal.x, center_y = cur_t.y + normal.y;
+                        // let center_x = cur_t.x + d.y / d_len * r, center_y = cur_t.y - d.x / d_len * r;
+                        console.log(center_x);
+                        console.log(center_y);
+                        drawArrow(cur_t.x, cur_t.y, center_x, center_y, context, 'white', 1, 0.5, [2, 5], 3);
+
+                        context.strokeStyle = 'white';
+                        context.lineWidth = 2;
+                        context.beginPath();
+                        context.arc(center_x, center_y, r, 0, Math.PI * 2);
+                        context.stroke();
+
+                        context.lineWidth = 1;
+                        console.log("reaching here");
+                    }
+
+                }
+
+                draw_handles(context) {
+                    context.strokeStyle = this.color_lerps[0];
+                    context.globalAlpha = 0.5;
+                    for (let a of [[0, 1], [2, 3]]) {
+                        context.beginPath();
+                        context.moveTo(this.points[a[0]].x, this.points[a[0]].y);
+                        context.lineTo(this.points[a[1]].x, this.points[a[1]].y);
+                        context.stroke();
+                    }
+                    context.globalAlpha = 1.0;
+                }
+                    
+                draw_lerps(pts, t, colors, context) {
+
+                    function lerp(A, B, t) {
+                        return new Point(A.x * (1 - t) + B.x * t, A.y * (1 - t) + B.y * t);
+                    }
+
+                    context.strokeStyle = colors[0];
+                    let lerp_points = [];
+                    for (let i = 0; i < pts.length - 1; i++) {
+                        context.beginPath();
+                        context.moveTo(pts[i].x, pts[i].y);
+                        context.lineTo(pts[i + 1].x, pts[i + 1].y);
+                        context.stroke();
+
+                        let lerp_pt = lerp(pts[i], pts[i + 1], t);
+                        lerp_pt.color = context.strokeStyle;
+                        lerp_pt.radius -= 1;
+                        lerp_pt.draw(context);
+                        lerp_points.push(lerp_pt);
+                    }
+                    if (lerp_points.length > 1) {
+                        this.draw_lerps(lerp_points, t, colors.slice(1), context)
+                    }
+                }
+            }
+
+
+            class MirrorConstraint {
+
+                constructor(start, center, end) {
+                    this.start = start;
+                    this.center = center;
+                    this.end = end;
+
+                    this.update_last_pos();
+                }
+
+                static calc_mirror(center, endpoint) {
+                    return {x: 2 * center.x - endpoint.x, y: 2 * center.y - endpoint.y};
+                }
+
+                update_last_pos() {
+                    this.start_last = new Point(this.start.x, this.start.y);
+                    this.center_last = new Point(this.center.x, this.center.y);
+                    this.end_last = new Point(this.end.x, this.end.y);
+                }
+
+                check_changes() {
+                    if (this.center.x != this.center_last.x || this.center.y != this.center_last.y) {
+                        let dx = this.center.x - this.center_last.x;
+                        let dy = this.center.y - this.center_last.y;
+
+                        this.start.x += dx;
+                        this.start.y += dy;
+                        this.end.x += dx;
+                        this.end.y += dy;
+                    } else if (this.start.x != this.start_last.x || this.start.y != this.start_last.y) {
+                        let mirror = MirrorConstraint.calc_mirror(this.center, this.start);
+                        this.end.x = mirror.x, this.end.y = mirror.y;
+                    } else if (this.end.x != this.end_last.x || this.end.y != this.end_last.y) {
+                        let mirror = MirrorConstraint.calc_mirror(this.center, this.end);
+                        this.start.x = mirror.x, this.start.y = mirror.y;
+                    }
+
+                    this.update_last_pos();
+                }
+            }
+
+            class Spline {
+
+                constructor() {
+                    this.curves = [];
+                    this.constraints = [];
+                    this.active = true; // actively adding new curves to this spline
+                    this.continuity = 1;
+                    this.next_curve_points = 4;
+                }
+
+                add_curve(points) {
+                    if (Array.isArray(points) ) {
+                        if (this.curves.length === 0 && points.length === 4) {
+                            this.curves.push(new CubicBezier(points));
+                            if (this.continuity === 0) {
+                                this.next_curve_points = 3;
+                            } else if (this.continuity === 1) {
+                                this.next_curve_points = 2;
+                            }
+                            return;
+                        } else if (this.curves.length > 0 && points.length === this.next_curve_points) {
+                            if (this.continuity === 1) {
+                                let last_curve = this.curves[this.curves.length - 1];
+                                let last_control = last_curve.points[last_curve.points.length - 2];
+                                let knot = last_curve.points[last_curve.points.length - 1];
+
+                                let new_control_coords = MirrorConstraint.calc_mirror(knot, last_control);
+                                let new_control = new Point(new_control_coords.x, new_control_coords.y);
+                                points.unshift(new_control);
+                                points.unshift(knot);
+                                this.curves.push(new CubicBezier(points));
+                                this.constraints.push(new MirrorConstraint(last_control, knot, new_control));
+                            } else if (this.continuity === 0) {
+                                return; // TO DO?: for C0
+                            }
+                            return;
+                        }
+                    }
+                    throw new Error("Spline next curve requires array of " + this.next_curve_points + " points.");
+                }
+
+                check_constraints() {
+                    for (let c of this.constraints) {
+                        c.check_changes();
+                    }
+                }
+
+                draw(context) {
+                    for (let curve of this.curves) {
+                        curve.draw(context);
+                    }
+                }
+            }
+
+            class BernsteinBox {
+                static functions = [
+                    function(t) {return -(t**3) + 3*(t**2) - 3*t + 1;},
+                    function(t) {return 3*(t**3) - 6*(t**2) + 3*t;},
+                    function(t) {return -3*(t**3) + 3*(t**2);},
+                    function(t) {return t**3;}
+                ];
+
+                static colors = ['magenta', 'royalblue', 'springgreen', 'yellow'];
+
+                constructor() {
+                    this.width = 150;
+                    this.height = 150;
+                    this.padding = 30;
+                    this.t_param = 0.0;
+                }
+
+                draw(context) {
+                    context.fillStyle = 'black';
+                    context.fillRect(
+                        context.canvas.width - this.width - this.padding,
+                        context.canvas.height - this.height - this.padding, this.width, this.height);
+
+                    for(let i = 0; i < BernsteinBox.functions.length; i++) {
+                        this.draw_function(context, BernsteinBox.colors[i], BernsteinBox.functions[i]);
+                    }
+                    for (let i = 0; i < BernsteinBox.functions.length; i++) {
+                        let x = this.ctx_x(this.t_param);
+                        let y = this.ctx_y(BernsteinBox.functions[i](this.t_param));
+
+                        context.fillStyle = 'black';
+                        context.beginPath();
+                        context.arc(x, y, 3, 0, Math.PI * 2);
+                        context.fill();
+                        context.strokeStyle = BernsteinBox.colors[i];
+                        // context.arc(x, y, 4, 0, Math.PI * 2);
+                        context.stroke();
+
+                    }
+
+                    context.strokeStyle = 'white';
+                    context.strokeRect(
+                        context.canvas.width - this.width - this.padding,
+                        context.canvas.height - this.height - this.padding, this.width, this.height);
+                }
+
+                 /*  Helper functions to convert between pixel coords on the drawing context and
+                    Bernstein polynomial function values shown on the graph */
+                func_x(ctx_x) {
+                    return (ctx_x - context.canvas.width + this.width + this.padding) / this.width;
+                }
+                // func_y(ctx_y, self) {
+                //     return (ctx_y - context.canvas.height + self.height + self.padding) / self.height;
+                // }
+                ctx_x(x) {
+                    return context.canvas.width - this.width - this.padding + this.width * x;
+                }
+                ctx_y(y) {
+                    return context.canvas.height - this.height * y - this.padding;
+                }
+
+                draw_function(context, color, func) {
+                    context.strokeStyle = color;
+                    context.beginPath();
+                    context.moveTo(this.ctx_x(0), this.ctx_y(func(0)));
+                    for (let pixelX = this.ctx_x(0) + 1; pixelX <= this.ctx_x(1); pixelX++) {
+                        context.lineTo(pixelX, this.ctx_y(func(this.func_x(pixelX))));
+                    }
+                    context.stroke();
+                }
+            }
+
+            function redraw() {
+                visibility_checks();
+
+                context.fillStyle = '#2A383E';
+                context.fillRect(0, 0, canvas.width, canvas.height);
+
+                for (let p of pts_for_bezier) {
+                    p.draw(context);
+                }
+                for (let o of objects) {
+                    o.draw(context);
+                }
+            }
+
+            function findActiveObj() {
+                for (let o of objects) {
+                    if (o instanceof CubicBezier) {
+                        for (let pt of o.points) {
+                            if (pt.mode == POINT_MOVING)
+                                return pt;
+                        }
+                    } else if (o instanceof Spline) {
+                        for (let c of o.curves) {
+                            for (let pt of c.points) {
+                                if (pt.mode == POINT_MOVING)
+                                    return pt;
+                            }
+                        }
+                    }
+                }
+                return null;
+            }
+
+            // Adapted from https://stackoverflow.com/questions/808826/draw-arrow-on-canvas-tag
+            function drawArrow(fromx, fromy, tox, toy, ctx, color, width = 4, alpha = 1.0, dash = [], headlen = 15){
+                // This makes it so the end of the arrow head is located at tox, toy, don't ask where 1.15 comes from
+                let angle = Math.atan2(toy-fromy,tox-fromx);
+                tox -= Math.cos(angle) * ((width*1.15));
+                toy -= Math.sin(angle) * ((width*1.15));
+
+                //starting path of the arrow from the start square to the end square and drawing the stroke
+                ctx.setLineDash(dash);
+                ctx.globalAlpha = alpha;
+                ctx.beginPath();
+                ctx.moveTo(fromx, fromy);
+                ctx.lineTo(tox, toy);
+                ctx.strokeStyle = color;
+                ctx.lineWidth = width;
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                //starting a new path from the head of the arrow to one of the sides of the point
+                ctx.beginPath();
+                ctx.moveTo(tox, toy);
+                ctx.lineTo(tox-headlen*Math.cos(angle-Math.PI/7),toy-headlen*Math.sin(angle-Math.PI/7));
+
+                //path from the side point of the arrow, to the other side point
+                ctx.lineTo(tox-headlen*Math.cos(angle+Math.PI/7),toy-headlen*Math.sin(angle+Math.PI/7));
+
+                //path from the side point back to the tip of the arrow, and then again to the opposite side point
+                ctx.lineTo(tox, toy);
+                ctx.lineTo(tox-headlen*Math.cos(angle-Math.PI/7),toy-headlen*Math.sin(angle-Math.PI/7));
+
+                //draws the paths created above
+                ctx.strokeStyle = color;
+                ctx.lineWidth = width;
+                ctx.stroke();
+                ctx.fillStyle = color;
+                ctx.fill();
+
+                ctx.lineWidth = 1;
+                ctx.globalAlpha = 1.0;
+            }
+
+            const POINT_COLOR = 'yellow';
+            const POINT_COLOR_MOVING = 'red';
+            const POINT_COLOR_FORMING_BEZIER = 'orange';
+            const BEZIER_COLOR = 'red';
+
+            const POINT_RADIUS = 3;
+
+            const NORMAL = 0;
+            const POINT_MOVING = 1;
+            const POINT_FORMING_BEZIER = 2;
+            const POINT_ORIGIN = 3;
+            const BEZIER_DRAW_LERPS = 1;
+
+
+            const canvas = document.getElementById('canvas');
+            const slider = document.getElementById('slider');
+            const box_button = document.getElementById('box');
+            let show_box = false;
+            const lerps_button = document.getElementById('lerps');
+            let show_lerps = false;
+            const tangent_button = document.getElementById('tangent');
+            let show_tangent = false;
+            const context = canvas.getContext('2d');
+            let show_lc = false;
+            const lc_button = document.getElementById('lc');
+            let show_osculating = false;
+            const osculating_button = document.getElementById('osculating');
+
+            let objects = [];
+            let pts_for_bezier = [];
+            let dot_selected = -1;
+            let is_dot_selected = false;
+            let ignore_click = false;
+            let mousedown_x, mousedown_y;
+
+            objects.push(new Spline());
+            objects.push(new BernsteinBox());
+
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+
+            redraw();
+
+            function visibility_checks() {
+                for (let o of objects) {
+                    if (o instanceof Spline) {
+                        for (let i = 0; i < o.curves.length; i++ ) {
+                            if (slider.value === slider.max && i === o.curves.length - 1) {
+                                o.curves[i].show_lerps = show_lerps;
+                                o.curves[i].show_tangent = show_tangent;
+                                o.curves[i].show_lc = show_lc;
+                                o.curves[i].show_osculating = show_osculating;
+                                o.curves[i].t_param = 1.0;
+                            } else if (Math.floor(slider.value) === i) {
+                                o.curves[i].show_lerps = show_lerps;
+                                o.curves[i].show_tangent = show_tangent;
+                                o.curves[i].show_lc = show_lc;
+                                o.curves[i].show_osculating = show_osculating;
+                                o.curves[i].t_param = slider.value - Math.floor(slider.value);
+                            } else {
+                                o.curves[i].show_lerps = false;
+                                o.curves[i].show_tangent = false;
+                                o.curves[i].show_lc = false;
+                                o.curves[i].show_osculating = false;
+                            }
+                            o.curves[i].show_normal = o.curves[i].show_tangent; // for now
+                            o.curves[i].show_box = show_box;
+                        }
+                    } else if (o instanceof BernsteinBox) {
+                        o.t_param = slider.value - Math.floor(slider.value);
+                        if (slider.value === slider.max) {
+                            o.t_param = 1.0;
+                        }
+                    } /* else if (o instanceof CubicBezier) {
+                        o.t_param = slider.value;
+                    } */
+                }
+            }
+
+
+            canvas.addEventListener('mousedown', (e) => {
+                ignore_click = false;
+                let rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                mousedown_x = x, mousedown_y = y;
+
+                for (let o of objects) {
+                    if (o instanceof CubicBezier) {
+                        for (let pt of o.points) {
+                            d = Math.hypot(pt.x - x, pt.y - y);
+                            if (d <= POINT_RADIUS + 1) {
+                                pt.mode = POINT_MOVING;
+                                ignore_click = true;
+                                redraw();
+                                return;
+                            }
+                        }
+                    } else if (o instanceof Spline) {
+                        for (let c of o.curves) {
+                            for (let pt of c.points) {
+                                d = Math.hypot(pt.x - x, pt.y - y);
+                                if (d <= POINT_RADIUS + 1) {
+                                    pt.mode = POINT_MOVING;
+                                    ignore_click = true;
+                                    redraw();
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            canvas.addEventListener('mouseup', (e) => {
+                let rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                if (Math.hypot(mousedown_x - x, mousedown_y - y) > 3) {
+                    ignore_click = true;
+                }
+
+                active_obj = findActiveObj();
+                if (active_obj !== null) {
+                    if (active_obj instanceof Point) {
+                        active_obj.mode = NORMAL;
+                    }
+                }
+            });
+
+            canvas.addEventListener('mousemove', (e) => {
+                let rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                active_obj = findActiveObj();
+                if (active_obj !== null) {
+                    if (active_obj instanceof Point) {
+                        active_obj.x = x;
+                        active_obj.y = y;
+                        for (let o of objects) {
+                            if (o instanceof Spline) {
+                                o.check_constraints();
+                                for (let c of o.curves) {
+                                    if (c.points.includes(active_obj)) {
+                                        c.calc_center();
+                                    }
+                                }
+                            }
+                        }
+                        redraw();
+                    }
+                }
+            });
+
+            canvas.addEventListener('click', (e) => {
+                if (!ignore_click) {
+                    let rect = canvas.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+
+                    new_point = new Point(x, y);
+                    new_point.mode = POINT_FORMING_BEZIER;
+                    pts_for_bezier.push(new_point);
+                    let active_spline;
+                    for (let o of objects) {
+                        if (o instanceof Spline && o.active && o.next_curve_points === pts_for_bezier.length) {
+                            for (let pt of pts_for_bezier) {
+                                pt.mode = NORMAL;
+                            }
+                            o.add_curve(pts_for_bezier);
+                            pts_for_bezier = [];
+                            slider.disabled = false;
+                            slider.max = o.curves.length
+                            break;
+                        }
+                    }
+                }
+                redraw();
+            });
+
+            slider.addEventListener('input', function() {
+                redraw();
+            });
+
+            box_button.addEventListener("click", function() {
+                show_box = !show_box;
+                for (let o of objects) {
+                    if (o instanceof Spline) {
+                        for (let c of o.curves) {
+                            c.show_box = show_box;
+                        }
+
+                    } else if (o instanceof CubicBezier) {
+                        o.show_box = show_box;
+                    }
+                }
+                redraw();
+            });
+
+            lerps_button.addEventListener("click", function() {
+                show_lerps = !show_lerps;
+                redraw();
+            });
+
+            tangent_button.addEventListener("click", function() {
+                show_tangent = !show_tangent;
+                redraw();
+            });
+
+            lc_button.addEventListener("click", function() {
+                show_lc = !show_lc;
+                redraw();
+            });
+
+            osculating_button.addEventListener("click", function() {
+                show_osculating = !show_osculating;
+                redraw();
+            });
+
+            window.addEventListener('resize', function() {
+                canvas.width = canvas.offsetWidth;
+                canvas.height = canvas.offsetHeight;
+                redraw();
+            });
+
+        </script>
+
+    </body>
+
+</html>
