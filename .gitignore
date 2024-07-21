@@ -1,2 +1,4 @@
 flask_session/
+.flaskenv
 __pycache__/
+static/jquery-3.7.1.js
