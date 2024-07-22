@@ -401,6 +401,9 @@ class BernsteinBox {
     }
 
     draw(ctx, flags) {
+        if (!flags['show_lc'])
+            return;
+        
         ctx.fillStyle = BERNSTEIN_BOX_COLOR_BCKG;
         ctx.fillRect(
             ctx.canvas.width - this.width - this.padding,
