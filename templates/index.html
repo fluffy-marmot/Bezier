@@ -13,44 +13,79 @@
     </head>
 
     <body>
+        <div id="main-container">
+            <div id="container">
 
-        <div class="container">
-            <canvas id="canvas")>Your browser does not support HTML5 Canvas.</canvas>
-        </div>
-        <div class="container">
-            <input type="range" disabled min="0" max="0" step="0.01" value="0" id="slider">
-            <button type="button" class="btn btn-primary" data-toggle="button" aria-pressed="false" autocomplete="off" id="tangent">Tangent Vector</button>
-            <button type="button" id="box">Bounding Box</button>
-            <button type="button" id="lc">Linear Combination</button>
-            <button type="button" id="lerps">Lerps</button>
-            <button type="button" id="osculating">Osculating Circle</button>
+                <div id="container-canvas">
+                    <canvas id="canvas")>Your browser does not support HTML5 Canvas.</canvas>
+                </div>
+
+                <div id="container-toolbar">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch" id="show_tangent">
+                        <label class="form-check-label" for="flexSwitchCheckDefault">Tangent Vector</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch" id="show_normal">
+                        <label class="form-check-label" for="flexSwitchCheckDefault">Normal Vector</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch" id="show_box">
+                        <label class="form-check-label" for="flexSwitchCheckDefault">Bounding Box</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch" id="show_lc">
+                        <label class="form-check-label" for="flexSwitchCheckDefault">Linear Combination</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch" id="show_lerps">
+                        <label class="form-check-label" for="flexSwitchCheckDefault">Linear Interpolations</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch" id="show_osculating">
+                        <label class="form-check-label" for="flexSwitchCheckDefault">Osculating Circle</label>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch" id="show_handles">
+                        <label class="form-check-label" for="flexSwitchCheckDefault">Draw Handles</label>
+                    </div>
+                </div>
+
+            </div>
+            <div id="container-footer">
+                <label id="label">Click canvas to place control points for one or more Bezier curves.</label><br>
+                <input type="range" disabled min="0" max="0" step="0.01" value="0" id="slider">
+            </div>
         </div>
 
         <script src="static/mathy.js"></script>
         <script>
 
             function redraw() {
-                visibility_checks();
-
                 context.fillStyle = BACKGROUND_COLOR;
                 context.fillRect(0, 0, canvas.width, canvas.height);
+
+                flags['t_param'] = slider.value === slider.max ? 1 : slider.value - Math.floor(slider.value);
 
                 for (let p of pts_for_bezier) {
                     p.draw(context);
                 }
                 for (let o of objects) {
-                    o.draw(context);
+                    if (o instanceof Spline) {
+                        active = Math.floor(slider.value) - (slider.value === slider.max ? 1 : 0);
+                        o.draw(context, flags, active);
+                        if (o.curves.length > 0) {
+                            label.textContent = "Curve " + (active + 1 < 10 ? " " : "") + (active + 1) + " /" + (o.curves.length < 10 ? " " : "") + o.curves.length + "        0 ≤ t = " + flags['t_param'].toFixed(2) + " ≤ 1";
+                        }
+                    }
+                    else if (o instanceof BernsteinBox)
+                        o.draw(context, flags);
                 }
             }
 
             function findActiveObj() {
                 for (let o of objects) {
-                    if (o instanceof CubicBezier) {
-                        for (let pt of o.points) {
-                            if (pt.mode == POINT_MOVING)
-                                return pt;
-                        }
-                    } else if (o instanceof Spline) {
+                    if (o instanceof Spline) {
                         for (let c of o.curves) {
                             for (let pt of c.points) {
                                 if (pt.mode == POINT_MOVING)
@@ -103,69 +138,6 @@
                 ctx.globalAlpha = 1.0;
             }
 
-            const canvas = document.getElementById('canvas');
-            const slider = document.getElementById('slider');
-            const box_button = document.getElementById('box');
-            let show_box = false;
-            const lerps_button = document.getElementById('lerps');
-            let show_lerps = false;
-            const tangent_button = document.getElementById('tangent');
-            let show_tangent = false;
-            const context = canvas.getContext('2d');
-            let show_lc = false;
-            const lc_button = document.getElementById('lc');
-            let show_osculating = false;
-            const osculating_button = document.getElementById('osculating');
-
-            let objects = [];
-            let pts_for_bezier = [];
-            let dot_selected = -1;
-            let is_dot_selected = false;
-            let ignore_click = false;
-            let mousedown_x, mousedown_y;
-
-            objects.push(new Spline());
-            objects.push(new BernsteinBox());
-
-            canvas.width = canvas.offsetWidth;
-            canvas.height = canvas.offsetHeight;
-
-            redraw();
-
-            function visibility_checks() {
-                for (let o of objects) {
-                    if (o instanceof Spline) {
-                        for (let i = 0; i < o.curves.length; i++ ) {
-                            if (slider.value === slider.max && i === o.curves.length - 1) {
-                                o.curves[i].show_lerps = show_lerps;
-                                o.curves[i].show_tangent = show_tangent;
-                                o.curves[i].show_lc = show_lc;
-                                o.curves[i].show_osculating = show_osculating;
-                                o.curves[i].t_param = 1.0;
-                            } else if (Math.floor(slider.value) === i) {
-                                o.curves[i].show_lerps = show_lerps;
-                                o.curves[i].show_tangent = show_tangent;
-                                o.curves[i].show_lc = show_lc;
-                                o.curves[i].show_osculating = show_osculating;
-                                o.curves[i].t_param = slider.value - Math.floor(slider.value);
-                            } else {
-                                o.curves[i].show_lerps = false;
-                                o.curves[i].show_tangent = false;
-                                o.curves[i].show_lc = false;
-                                o.curves[i].show_osculating = false;
-                            }
-                            o.curves[i].show_normal = o.curves[i].show_tangent; // for now
-                            o.curves[i].show_box = show_box;
-                        }
-                    } else if (o instanceof BernsteinBox) {
-                        o.t_param = slider.value - Math.floor(slider.value);
-                        if (slider.value === slider.max) {
-                            o.t_param = 1.0;
-                        }
-                    }
-                }
-            }
-
             function canvas_coords(e) {
                 let bounding_rect = canvas.getBoundingClientRect();
                 return {
@@ -175,6 +147,17 @@
             }
 
             $(function() {
+                redraw();
+
+                // for every toggle class button in our html, we will create a key in the flags dictionary
+                $('.form-check-input').each(function() {
+                    flags[$(this).attr('id')] = false;  // default to false at the beginning
+                    $(this).change(function() {
+                        flags[$(this).attr('id')] = !flags[$(this).attr('id')];
+                        redraw();
+                    });
+                });
+
                 $('#canvas').mousedown( (e) => {
                     mouse = canvas_coords(e);
                     mousedown_x = mouse.x, mousedown_y = mouse.y;
@@ -241,7 +224,7 @@
                         new_point.mode = POINT_FORMING_BEZIER;
                         pts_for_bezier.push(new_point);
                         for (let o of objects) {
-                            if (o instanceof Spline && o.active && o.next_curve_points === pts_for_bezier.length) {
+                            if (o instanceof Spline && o.next_curve_points === pts_for_bezier.length) {
                                 for (let pt of pts_for_bezier) {
                                     pt.mode = POINT_STANDARD;
                                 }
@@ -255,42 +238,8 @@
                     }
                     redraw();
                 });
+
                 $('#slider').on('input', () => {
-                    redraw();
-                });
-
-                box_button.addEventListener("click", function() {
-                    show_box = !show_box;
-                    for (let o of objects) {
-                        if (o instanceof Spline) {
-                            for (let c of o.curves) {
-                                c.show_box = show_box;
-                            }
-
-                        } else if (o instanceof CubicBezier) {
-                            o.show_box = show_box;
-                        }
-                    }
-                    redraw();
-                });
-
-                lerps_button.addEventListener("click", function() {
-                    show_lerps = !show_lerps;
-                    redraw();
-                });
-
-                tangent_button.addEventListener("click", function() {
-                    show_tangent = !show_tangent;
-                    redraw();
-                });
-
-                lc_button.addEventListener("click", function() {
-                    show_lc = !show_lc;
-                    redraw();
-                });
-
-                osculating_button.addEventListener("click", function() {
-                    show_osculating = !show_osculating;
                     redraw();
                 });
 
@@ -299,6 +248,25 @@
                     redraw();
                 });
             });
+
+            const canvas = document.getElementById('canvas');
+            const slider = document.getElementById('slider');
+            const label = document.getElementById('label');
+            const context = canvas.getContext('2d');
+            
+            let flags = {};
+            let objects = [];
+            let pts_for_bezier = [];
+            let dot_selected = -1;
+            let is_dot_selected = false;
+            let ignore_click = false;
+            let mousedown_x, mousedown_y;
+
+            objects.push(new Spline());
+            objects.push(new BernsteinBox());
+
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
 
         </script>
 
